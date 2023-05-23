@@ -163,7 +163,7 @@ pub trait Prover {
     /// secret and public inputs. Public inputs must match the value returned from
     /// [Self::get_pub_inputs()](Prover::get_pub_inputs) for the provided trace.
     #[rustfmt::skip]
-    fn prove(&self, trace: Self::Trace) -> Result<StarkProof, ProverError> {
+    fn prove(&self, trace: Self::Trace, trace1: Self::Trace) -> Result<StarkProof, ProverError> {
         // figure out which version of the generic proof generation procedure to run. this is a sort
         // of static dispatch for selecting two generic parameter: extension field and hash function.
         match self.options().field_extension() {
@@ -190,7 +190,11 @@ pub trait Prover {
     /// execution `trace` is valid against this prover's AIR.
     /// TODO: make this function un-callable externally?
     #[doc(hidden)]
-    fn generate_proof<E>(&self, mut trace: Self::Trace) -> Result<StarkProof, ProverError>
+    fn generate_proof<E>(
+        &self,
+        mut trace: Self::Trace,
+        mut trace1: Self::Trace,
+    ) -> Result<StarkProof, ProverError>
     where
         E: FieldElement<BaseField = Self::BaseField>,
     {
@@ -200,18 +204,28 @@ pub trait Prover {
         let pub_inputs = self.get_pub_inputs(&trace);
         let pub_inputs_elements = pub_inputs.to_elements();
 
+        //My code
+        let pub_inputs1 = self.get_pub_inputs(&trace1);
+        let pub_inputs_elements1 = pub_inputs1.to_elements();
+
         // create an instance of AIR for the provided parameters. this takes a generic description
         // of the computation (provided via AIR type), and creates a description of a specific
         // execution of the computation for the provided public inputs.
         let air = Self::Air::new(trace.get_info(), pub_inputs, self.options().clone());
 
+        //My code
+        let air1 = Self::Air::new(trace1.get_info(), pub_inputs1, self.options().clone());
+
         // create a channel which is used to simulate interaction between the prover and the
         // verifier; the channel will be used to commit to values and to draw randomness that
         // should come from the verifier.
-        let mut channel = ProverChannel::<Self::Air, E, Self::HashFn, Self::RandomCoin>::new(
-            &air,
-            pub_inputs_elements,
-        );
+        let mut channel =
+            ProverChannel::<Self::Air, Self::Air1, E, Self::HashFn, Self::RandomCoin>::new(
+                &air,
+                &air1,
+                pub_inputs_elements,
+            );
+        //Shoulf be changed for multiple pub_inputs
 
         // 1 ----- Commit to the execution trace --------------------------------------------------
 
@@ -227,8 +241,8 @@ pub trait Prover {
         );
 
         // extend the main execution trace and build a Merkle tree from the extended trace
-        let (main_trace_lde, main_trace_tree, main_trace_polys) =
-            self.build_trace_commitment::<Self::BaseField>(trace.main_segment(), &domain);
+        let (main_trace_lde, main_trace1_lde, main_trace_tree, main_trace_polys, main_trace1_polys) =
+            self.build_trace_commitment::<Self::BaseField>(trace.main_segment(),trace1.main_segment(), &domain);
 
         // commit to the LDE of the main trace by writing the root of its Merkle tree into
         // the channel
@@ -242,7 +256,13 @@ pub trait Prover {
             main_trace_tree,
             domain.trace_to_lde_blowup(),
         );
+        let mut trace1_commitment = TraceCommitment::new(
+            main_trace1_lde,
+            main_trace_tree,
+            domain.trace_to_lde_blowup(),
+        );
         let mut trace_polys = TracePolyTable::new(main_trace_polys);
+        let mut trace_polys1 = TracePolyTable::new(main_trace1_polys);
 
         // build auxiliary trace segments (if any), and append the resulting segments to trace
         // commitment and trace polynomial table structs
@@ -464,8 +484,9 @@ pub trait Prover {
     fn build_trace_commitment<E>(
         &self,
         trace: &ColMatrix<E>,
+        trace1: &ColMatrix<E>,
         domain: &StarkDomain<Self::BaseField>,
-    ) -> (RowMatrix<E>, MerkleTree<Self::HashFn>, ColMatrix<E>)
+    ) -> (RowMatrix<E>, RowMatrix<E>, MerkleTree<Self::HashFn>, ColMatrix<E>, ColMatrix<E>)
     where
         E: FieldElement<BaseField = Self::BaseField>,
     {
@@ -473,8 +494,11 @@ pub trait Prover {
         #[cfg(feature = "std")]
         let now = Instant::now();
         let trace_polys = trace.interpolate_columns();
+        let trace1_polys = trace1.interpolate_columns();
         let trace_lde =
             RowMatrix::evaluate_polys_over::<DEFAULT_SEGMENT_WIDTH>(&trace_polys, domain);
+        let trace1_lde =
+            RowMatrix::evaluate_polys_over::<DEFAULT_SEGMENT_WIDTH>(&trace_polys1, domain);
         #[cfg(feature = "std")]
         debug!(
             "Extended execution trace of {} columns from 2^{} to 2^{} steps ({}x blowup) in {} ms",
@@ -488,7 +512,25 @@ pub trait Prover {
         // build trace commitment
         #[cfg(feature = "std")]
         let now = Instant::now();
-        let trace_tree = trace_lde.commit_to_rows();
+        //let trace_tree = trace_lde.commit_to_rows();
+        let mut row_hashes = unsafe { uninit_vector::<H::Digest>(self.num_rows()) };
+
+        // iterate though matrix rows, hashing each row
+        batch_iter_mut!(
+            &mut row_hashes,
+            128, // min batch size
+            |batch: &mut [H::Digest], batch_offset: usize| {
+                for (i, row_hash) in batch.iter_mut().enumerate() {
+                    let trace_row = trace_lde.row(batch_offset + i);
+                    let trace1_row = trace_lde1.row(batch_offset + i);
+                    let comb_rows = [trace1_row, trace1_row].concat();
+                    *row_hash = H::hash_elements(comb_rows);
+                }
+            }
+        );
+
+        // build Merkle tree out of hashed rows
+        MerkleTree::new(row_hashes).expect("failed to construct trace Merkle tree")
         #[cfg(feature = "std")]
         debug!(
             "Computed execution trace commitment (Merkle tree of depth {}) in {} ms",
@@ -496,7 +538,7 @@ pub trait Prover {
             now.elapsed().as_millis()
         );
 
-        (trace_lde, trace_tree, trace_polys)
+        (trace_lde, trace1_lde, trace_tree, trace_polys, trace1_polys)
     }
 
     /// Evaluates constraint composition polynomial over the LDE domain and builds a commitment

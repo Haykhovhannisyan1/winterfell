@@ -16,8 +16,11 @@ use utils::{
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Context {
     trace_layout: TraceLayout,
+    trace1_layout: TraceLayout,
     trace_length: usize,
+    trace1_length: usize,
     trace_meta: Vec<u8>,
+    trace1_meta: Vec<u8>,
     field_modulus_bytes: Vec<u8>,
     options: ProofOptions,
 }
@@ -27,11 +30,20 @@ impl Context {
     // --------------------------------------------------------------------------------------------
     /// Creates a new context for a computation described by the specified field, trace info, and
     /// proof options.
-    pub fn new<B: StarkField>(trace_info: &TraceInfo, options: ProofOptions) -> Self {
+    pub fn new<B: StarkField>(
+        trace_info: &TraceInfo,
+        trace1_info: &TraceInfo,
+        options: ProofOptions,
+    ) -> Self {
         Context {
             trace_layout: trace_info.layout().clone(),
             trace_length: trace_info.length(),
             trace_meta: trace_info.meta().to_vec(),
+
+            trace1_layout: trace1_info.layout().clone(),
+            trace1_length: trace1_info.length(),
+            trace1_meta: trace1_info.meta().to_vec(),
+
             field_modulus_bytes: B::get_modulus_le_bytes(),
             options,
         }
