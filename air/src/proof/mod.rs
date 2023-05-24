@@ -56,9 +56,11 @@ pub struct StarkProof {
     /// Decommitments of extended execution trace values (for all trace segments) at position
     ///  queried by the verifier.
     pub trace_queries: Vec<Queries>,
+    pub trace1_queries: Vec<Queries>,
     /// Decommitments of constraint composition polynomial evaluations at positions queried by
     /// the verifier.
     pub constraint_queries: Queries,
+    pub constraint_queries1: Queries,
     /// Trace and constraint polynomial evaluations at an out-of-domain point.
     pub ood_frame: OodFrame,
     /// Low-degree proof for a DEEP composition polynomial.
@@ -133,7 +135,9 @@ impl StarkProof {
         self.context.write_into(&mut result);
         self.commitments.write_into(&mut result);
         self.trace_queries.write_into(&mut result);
+        self.trace1_queries.write_into(&mut result);
         self.constraint_queries.write_into(&mut result);
+        self.constraint_queries1.write_into(&mut result);
         self.ood_frame.write_into(&mut result);
         self.fri_proof.write_into(&mut result);
         result.extend_from_slice(&self.pow_nonce.to_le_bytes());
@@ -165,6 +169,7 @@ impl StarkProof {
             context,
             commitments,
             trace_queries,
+            trace1_queries,
             constraint_queries: Queries::read_from(&mut source)?,
             ood_frame: OodFrame::read_from(&mut source)?,
             fri_proof: FriProof::read_from(&mut source)?,
